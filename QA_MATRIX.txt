@@ -1,0 +1,45 @@
+OP-SYM MOBILE 5.1 VISUAL QA MATRIX
+
+Purpose: Visual approval only. No backend integration.
+
+PORTRAIT
+[ ] Home
+[ ] Today
+[ ] Tasks
+[ ] Inbox
+[ ] Week
+[ ] Month
+[ ] Year
+[ ] Commitments
+[ ] Analytics
+[ ] More
+[ ] Settings
+[ ] Capture
+[ ] Task Detail
+
+LANDSCAPE
+[ ] Home
+[ ] Today
+[ ] Tasks
+[ ] Inbox
+[ ] Week
+[ ] Month
+[ ] Year
+[ ] Commitments
+[ ] Analytics
+[ ] More
+[ ] Settings
+[ ] Capture
+[ ] Task Detail
+
+GLOBAL
+[ ] No text requires zooming
+[ ] Bottom navigation is always clear
+[ ] Center Capture is dominant
+[ ] No oversized SVG/icon rendering
+[ ] No raw browser/default-form styling
+[ ] No legacy Op-Sym UI visible
+[ ] No portrait layout duplicated in landscape
+[ ] Touch targets feel comfortably large
+[ ] Brand typography is consistent
+[ ] Brand colors are consistent

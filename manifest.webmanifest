@@ -1,0 +1,58 @@
+{
+  "id": "/opsym-mobile-visual-test/",
+  "name": "Op-Sym",
+  "short_name": "Op-Sym",
+  "description": "Personal operating system for capture, commitments, tasks and follow-through.",
+  "start_url": "/opsym-mobile-visual-test/?v=1903",
+  "scope": "/opsym-mobile-visual-test/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "orientation": "any",
+  "categories": [
+    "productivity",
+    "utilities"
+  ],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/opsym-mobile-visual-test/icon-192.png?v=1903",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/opsym-mobile-visual-test/icon-512.png?v=1903",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/opsym-mobile-visual-test/icon-maskable-512.png?v=1903",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "share_target": {
+    "action": "/opsym-mobile-visual-test/",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "launch_handler": {
+    "client_mode": [
+      "focus-existing",
+      "navigate-existing",
+      "navigate-new"
+    ]
+  }
+}
