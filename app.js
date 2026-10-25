@@ -59,7 +59,7 @@ let liveTodayLoaded = false;
 let liveTodayError = null;
 
 
-const OPSYM_UI_VERSION="1.9.4.1-findtime-duration-hotfix";
+const OPSYM_UI_VERSION="2.0-u2-mobile-task-actions-dev.1";
 const OPSYM_NATIVE_WRAPPER_VERSION="1.9.0-native.2";
 const opsymDiag={
   uiVersion:OPSYM_UI_VERSION,
@@ -97,6 +97,7 @@ let liveTaskDetailError = null;
 let activeTaskDetailTab = "details";
 let completeActionInFlight = false;
 let rescheduleActionInFlight = false;
+let taskActionInFlight = false;
 let captureEntryMode = "general";
 let createTaskInFlight = false;
 let captureInterpretInFlight = false;
@@ -522,12 +523,139 @@ async function refreshAnalytics_(){
 function showTaskMore_(taskId){
   const t=(liveTaskDetailData?.task)||liveTaskArray_().find(x=>x.taskId===taskId)||{};
   const sourceUrl=String(t.sourceUrl||"").trim();
+  const isClosed=/^(completed|cancelled|closed|resolved)$/i.test(String(t.status||""));
   plannerSheet_("Task actions",t.title||taskId,`
     <div class="opsym-action-menu">
+      ${!isClosed?`<button type="button" data-u2-task-action="snooze" data-task-id="${escapeHtml(taskId)}"><strong>Snooze</strong><span>Pause Op-Sym action prompts for this Task.</span></button>`:""}
+      ${!isClosed&&(t.scheduledDateIso||t.scheduledDate)?`<button type="button" data-u2-task-action="running_late" data-task-id="${escapeHtml(taskId)}"><strong>Running late</strong><span>Shift this Task later and check for conflicts.</span></button>`:""}
+      ${!isClosed?`<button type="button" data-u2-task-action="delegate" data-task-id="${escapeHtml(taskId)}"><strong>Delegate</strong><span>Assign the Task to another person.</span></button>`:""}
+      ${!isClosed?`<button type="button" data-u2-task-action="cancel" data-task-id="${escapeHtml(taskId)}"><strong>Cancel Task</strong><span>Mark this Task as cancelled.</span></button>`:""}
       <button type="button" data-copy-task-title="${escapeHtml(t.title||"")}"><strong>Copy task title</strong><span>Copy the task title to the clipboard.</span></button>
       ${sourceUrl?`<button type="button" data-open-task-source="${escapeHtml(sourceUrl)}"><strong>Open source</strong><span>Open the original source link.</span></button>`:""}
       <button type="button" data-task-provenance="${escapeHtml(taskId)}"><strong>View provenance</strong><span>Show Signal and Inbox traceability.</span></button>
     </div>`);
+  requestAnimationFrame(bindU2TaskActionButtons_);
+}
+
+async function performMobileTaskAction_(taskId,action,params={}){
+  const id=String(taskId||"").trim();
+  if(!id||taskActionInFlight)return false;
+  if(!window.OpsymTaskActions){
+    await opsymNotice({title:"Task actions unavailable",message:"The U2 shared Task Actions module is not loaded."});
+    return false;
+  }
+  taskActionInFlight=true;
+  try{
+    const result=await window.OpsymTaskActions.perform(id,action,params||{});
+    if(result?.status==="error")throw new Error(result.error||result.message||"Task action failed.");
+
+    if(result?.status==="action_needs_resolution" || result?.action==="running_late_needs_resolution"){
+      const slots=result.candidates||[];
+      showRunningLateResolution_(id,slots);
+      return false;
+    }
+
+    const labels={snooze:"Task snoozed",running_late:"Task shifted",delegate:"Task delegated",cancel:"Task cancelled",reschedule:"Task rescheduled"};
+    toast(labels[action]||"Task updated");
+    invalidateLiveViews("home","today","tasks","task-detail");
+    await Promise.allSettled([
+      loadLiveHomeData(false),
+      loadLiveTodayData(false),
+      loadLiveTasksData(false)
+    ]);
+    if(currentRoute()==="task-detail"){
+      if(action==="cancel"){
+        selectedTaskId="";
+        render("tasks",true);
+      }else{
+        await loadLiveTaskDetailData(id,false);
+      }
+    }
+    return true;
+  }catch(err){
+    await opsymNotice({title:"Task action not confirmed",message:String(err?.message||err)});
+    return false;
+  }finally{
+    taskActionInFlight=false;
+  }
+}
+
+function showRunningLateResolution_(taskId,slots){
+  const rows=(slots||[]).slice(0,5).map(s=>`<button type="button" data-u2-late-slot
+    data-task-id="${escapeHtml(taskId)}"
+    data-date="${escapeHtml(s.date||"")}"
+    data-time="${escapeHtml(s.start||s.time||"")}">
+    <strong>${escapeHtml(s.date||"")} · ${escapeHtml(s.start||s.time||"")}${s.end?`-${escapeHtml(s.end)}`:""}</strong>
+    <span>Use this alternative slot</span>
+  </button>`).join("");
+  plannerSheet_("Choose another time","The late shift conflicts with existing work.",`
+    <div class="opsym-action-menu">
+      ${rows||`<div class="empty-card"><strong>No automatic alternative found.</strong><small>Use Reschedule to choose another date and time.</small></div>`}
+    </div>`);
+  requestAnimationFrame(bindU2LateSlots_);
+}
+
+function bindU2LateSlots_(){
+  document.querySelectorAll("[data-u2-late-slot]").forEach(el=>{
+    if(el.dataset.bound==="1")return;
+    el.dataset.bound="1";
+    el.addEventListener("click",async()=>{
+      const taskId=el.dataset.taskId||"";
+      const date=el.dataset.date||"";
+      const time=el.dataset.time||"";
+      document.querySelector("#opsymPlannerBackdrop")?.remove();
+      document.body.classList.remove("opsym-modal-open");
+      await performMobileTaskAction_(taskId,"reschedule",{date,time,reason:"Running late — alternative slot"});
+    });
+  });
+}
+
+function bindU2TaskActionButtons_(){
+  document.querySelectorAll("[data-u2-task-action]").forEach(el=>{
+    if(el.dataset.bound==="1")return;
+    el.dataset.bound="1";
+    el.addEventListener("click",async()=>{
+      const action=el.dataset.u2TaskAction||"";
+      const taskId=el.dataset.taskId||selectedTaskId||"";
+      document.querySelector("#opsymPlannerBackdrop")?.remove();
+      document.body.classList.remove("opsym-modal-open");
+
+      if(action==="snooze"){
+        const minutes=await opsymPrompt({title:"Snooze Task",message:"How many minutes should Op-Sym pause action prompts for this Task?",value:"30",confirmLabel:"Snooze"});
+        if(minutes===null)return;
+        await performMobileTaskAction_(taskId,"snooze",{minutes:Math.max(5,Number(minutes)||30)});
+        return;
+      }
+
+      if(action==="running_late"){
+        const minutes=await opsymPrompt({title:"Running late",message:"How many minutes late are you running?",value:"30",confirmLabel:"Check & shift"});
+        if(minutes===null)return;
+        await performMobileTaskAction_(taskId,"running_late",{minutes:Math.max(5,Number(minutes)||30)});
+        return;
+      }
+
+      if(action==="delegate"){
+        const name=await opsymPrompt({title:"Delegate Task",message:"Enter the delegate's name. You can leave this blank if you will enter an email next.",value:"",confirmLabel:"Next"});
+        if(name===null)return;
+        const email=await opsymPrompt({title:"Delegate email",message:"Enter an email address if available, or leave blank.",value:"",confirmLabel:"Delegate"});
+        if(email===null)return;
+        if(!String(name||"").trim()&&!String(email||"").trim()){
+          await opsymNotice({title:"Delegate required",message:"Enter a name or email address."});
+          return;
+        }
+        await performMobileTaskAction_(taskId,"delegate",{name:String(name||"").trim(),email:String(email||"").trim()});
+        return;
+      }
+
+      if(action==="cancel"){
+        const reason=await opsymPrompt({title:"Cancel Task",message:"Enter a reason for cancellation.",value:"",confirmLabel:"Continue"});
+        if(reason===null)return;
+        const ok=await opsymConfirm({title:"Cancel Task",message:"This will mark the Task as Cancelled.",confirmLabel:"Cancel Task",cancelLabel:"Keep Task"});
+        if(!ok)return;
+        await performMobileTaskAction_(taskId,"cancel",{reason:String(reason||"").trim()||"Cancelled from mobile"});
+      }
+    });
+  });
 }
 function timezoneValues_(){
   try{
@@ -620,6 +748,34 @@ const mobileBridge = {
   endpoint: localStorage.getItem("opsym_mobile_bridge_url") || "",
   key: localStorage.getItem("opsym_mobile_bridge_key") || ""
 };
+if(window.OpsymCore) window.OpsymCore.configure(mobileBridge);
+
+if(window.OpsymTaskActions){
+  window.OpsymTaskActions.setProvider({
+    name:"mobile-bridge-u2",
+    async create(payload){
+      const p={...(payload||{})};
+      if(!p.action)p.action="create-task";
+      if(mobileBridge.key&&!p.key)p.key=mobileBridge.key;
+      const x=await jsonpRequest(mobileBridge.endpoint,p,45000,"Task creation");
+      if(!x||x.ok!==true)throw new Error(x?.error||"Task creation failed.");
+      return x.data||{};
+    },
+    async complete(taskId){
+      return submitMutationAndWait("complete-task",{taskId});
+    },
+    async reschedule(taskId,date,time,reason){
+      return submitMutationAndWait("reschedule-task",{taskId,date,time,reason});
+    },
+    async reschedulePreset(taskId,preset){
+      throw new Error("Preset reschedule is not exposed by the current Mobile Bridge.");
+    },
+    async perform(taskId,action,params){
+      const flat={taskId,taskAction:action,...(params||{})};
+      return submitMutationAndWait("task-action",flat);
+    }
+  });
+}
 
 function escapeHtml(value){
   return String(value == null ? "" : value)
@@ -654,6 +810,7 @@ function saveMobileBridgeConfig(endpoint,key=""){
   localStorage.setItem("opsym_mobile_bridge_key",secret);
   mobileBridge.endpoint=clean;
   mobileBridge.key=secret;
+  if(window.OpsymCore) window.OpsymCore.configure({endpoint:clean,key:secret});
 }
 
 function clearMobileBridgeConfig(){
@@ -674,33 +831,8 @@ function clearMobileBridgeConfig(){
 }
 
 function jsonpRequest(url,params,timeoutMs=9000,requestLabel="Op-Sym"){
-  return new Promise((resolve,reject)=>{
-    const cb="__opsym_cb_"+Date.now()+"_"+Math.random().toString(36).slice(2);
-    const script=document.createElement("script");
-    let finished=false;
-    const label=String(requestLabel||"Op-Sym").trim();
-    const timer=setTimeout(
-      ()=>finish(new Error(`${label} request timed out after ${Math.round(timeoutMs/1000)} seconds.`)),
-      timeoutMs
-    );
-
-    function finish(err,value){
-      if(finished)return;
-      finished=true;
-      clearTimeout(timer);
-      try{delete window[cb]}catch(_){window[cb]=undefined}
-      script.remove();
-      err?reject(err):resolve(value);
-    }
-
-    window[cb]=payload=>finish(null,payload);
-    const q=new URLSearchParams({...params,callback:cb,_:Date.now().toString()});
-    script.src=url+"?"+q.toString();
-    script.async=true;
-    script.referrerPolicy="no-referrer";
-    script.onerror=()=>finish(new Error(`${label} could not reach the Op-Sym Mobile Bridge.`));
-    document.head.appendChild(script);
-  });
+  if(!window.OpsymCore) return Promise.reject(new Error("Op-Sym Shared Core is not loaded."));
+  return window.OpsymCore.transport.jsonp(url,params,timeoutMs,requestLabel);
 }
 
 
@@ -708,11 +840,9 @@ function jsonpRequest(url,params,timeoutMs=9000,requestLabel="Op-Sym"){
 async function loadLiveHomeData(showFailureToast=false){
   if(!mobileBridge.endpoint) return false;
   try{
-    const params={action:"home"};
-    if(mobileBridge.key) params.key=mobileBridge.key;
-    const payload=await jsonpRequest(mobileBridge.endpoint,params,12000,"Home data");
-    if(!payload || payload.ok!==true) throw new Error(payload?.error || "Invalid Home response.");
-    liveHomeData=payload.data || null;
+    if(!window.OpsymCore) throw new Error("Op-Sym Shared Core is not loaded.");
+    window.OpsymCore.configure(mobileBridge);
+    liveHomeData=await window.OpsymCore.api.home();
     liveHomeLoaded=!!liveHomeData;
     liveHomeLastUpdatedAt=Date.now();
     liveHomeError=null;
@@ -771,11 +901,9 @@ async function loadLiveTodayData(showFailureToast=false){
 async function loadLiveTasksData(showFailureToast=false){
   if(!mobileBridge.endpoint) return false;
   try{
-    const params={action:"tasks"};
-    if(mobileBridge.key) params.key=mobileBridge.key;
-    const payload=await jsonpRequest(mobileBridge.endpoint,params);
-    if(!payload || payload.ok!==true) throw new Error(payload?.error || "Invalid Tasks response.");
-    liveTasksData=payload.data || null;
+    if(!window.OpsymCore) throw new Error("Op-Sym Shared Core is not loaded.");
+    window.OpsymCore.configure(mobileBridge);
+    liveTasksData=await window.OpsymCore.api.tasks();
     liveTasksLoaded=!!liveTasksData;
     liveTasksError=null;
     reconcileLoadedCanonicalTasks_();
@@ -833,7 +961,7 @@ async function completeTaskById(taskId,title=""){
 
   completeActionInFlight=true;
   try{
-    const result=await submitMutationAndWait("complete-task",{taskId:id});
+    const result=window.OpsymTaskActions ? await window.OpsymTaskActions.complete(id) : await submitMutationAndWait("complete-task",{taskId:id});
 
     if(result.status==="error"){
       throw new Error(result.error || result.message || "The task could not be completed.");
@@ -1580,7 +1708,7 @@ async function waitForMutationStatus(requestId,{timeoutMs=30000}={}){
       if([
         "completed","rescheduled","blocked","captured","duplicate",
         "commitment_created","resolved","clarified",
-        "promoted_task","promoted_commitment","error"
+        "promoted_task","promoted_commitment","action_completed","action_needs_resolution","error"
       ].includes(s.status)) return s;
     }catch(e){lastError=e;}
   }
@@ -2267,16 +2395,20 @@ async function createTaskFromForm(){
       // the same request that performs the durable write returns the canonical
       // Task result. No normal-path polling/reconciliation is required.
       const directParams={...params,_ts:String(Date.now())};
-      const payload=await jsonpRequest(
-        mobileBridge.endpoint,
-        directParams,
-        45000,
-        fromInbox?"Task promotion":"Task creation"
-      );
-      if(!payload || payload.ok!==true){
-        throw new Error(payload?.error || "Task creation failed.");
-      }
-      result=payload.data || {};      
+      if(window.OpsymTaskActions && !fromInbox){
+        result=await window.OpsymTaskActions.create(directParams);
+      }else{
+        const payload=await jsonpRequest(
+          mobileBridge.endpoint,
+          directParams,
+          45000,
+          fromInbox?"Task promotion":"Task creation"
+        );
+        if(!payload || payload.ok!==true){
+          throw new Error(payload?.error || "Task creation failed.");
+        }
+        result=payload.data || {};
+      }      
       updateOpsymDiag_({lastTaskResponse:result,lastTaskError:""});
 
       // The durable-write response is the authoritative Saved boundary.
@@ -2655,11 +2787,9 @@ async function confirmAndWriteReschedule(taskId,title,preview){
   const confirmed=await opsymConfirm({title:"Reschedule task",message:`${title}\n${taskId}\n\nNew slot: ${preview.date} at ${preview.time}\nEstimated end: ${preview.endTime}\n\nNo direct task overlap was found.`,confirmLabel:"Reschedule",cancelLabel:"Cancel"});
   if(!confirmed) return false;
 
-  const result=await submitMutationAndWait("reschedule-task",{
-    taskId,
-    date:preview.date,
-    time:preview.time
-  });
+  const result=window.OpsymTaskActions
+    ? await window.OpsymTaskActions.reschedule(taskId,preview.date,preview.time,"Mobile reschedule")
+    : await submitMutationAndWait("reschedule-task",{taskId,date:preview.date,time:preview.time});
 
   if(result.status==="error"){
     throw new Error(result.error || result.message || "The task could not be rescheduled.");
@@ -2892,7 +3022,7 @@ function runBackendSetupFromQuery(){
   if(p.get("setup")!=="1") return;
 
   setTimeout(async()=>{
-    const endpoint=await opsymPrompt({title:"Op-Sym Mobile Bridge setup",message:"Paste the Apps Script Web App URL ending in /exec or /dev.",value:mobileBridge.endpoint||"",placeholder:"https://script.google.com/macros/s/.../dev",confirmLabel:"Save"});
+    const endpoint=await opsymPrompt({title:"Op-Sym Mobile Bridge setup",message:"Paste the Apps Script Web App URL ending in /exec or /dev.",value:mobileBridge.endpoint||"",placeholder:"https://script.google.com/macros/s/.../exec",confirmLabel:"Save"});
     if(endpoint===null)return;
     try{
       saveMobileBridgeConfig(endpoint,"");
@@ -3913,7 +4043,7 @@ document.addEventListener("click",e=>{
 window.addEventListener("popstate",()=>{activeRoute=location.hash.replace("#","")||"home";safeNavigate_(activeRoute,{replace:true});});
 matchMedia("(orientation: landscape)").addEventListener?.("change",()=>safeNavigate_(location.hash.replace("#","")||"home",{replace:true}));
 
-if("serviceWorker" in navigator){window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./service-worker.js?v=1941",{scope:"/opsym-mobile-visual-test/"});await reg.update();}catch(_){}});}
+if("serviceWorker" in navigator){window.addEventListener("load",async()=>{try{const reg=await navigator.serviceWorker.register("./service-worker.js?v=20u1",{scope:"/opsym-mobile-visual-test/"});await reg.update();}catch(_){}});}
 pendingSharedCapture=readShareTargetFromUrl();
 if(pendingSharedCapture) applyPendingSharedCapture();
 
